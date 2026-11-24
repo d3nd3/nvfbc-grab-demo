@@ -1,0 +1,120 @@
+# nvfbc-grab-demo — system overview
+# Four iterations of the same experiment: pull the X screen out of the NVIDIA
+# driver with NvFBC and show it in a GL window. main.cpp is the current one.
+# Zones run left to right: entry points -> core -> state -> external.
+# Style classes set strokes only, so light and dark stay readable.
+
+title: |md
+  # nvfbc-grab-demo
+  Capture the X screen through NVIDIA NvFBC and draw it into a GL window — ToGL path, no CUDA, no encoder.
+| {near: top-center}
+
+direction: right
+grid-columns: 2
+grid-rows: 2
+horizontal-gap: 140
+vertical-gap: 90
+
+entry: Entry points {
+  direction: down
+
+  build: `./compile.sh` -> `your_program`
+  siblings: `compile2/3/4.sh` · older mains, same binary
+  run: `./your_program` · no args, `DISPLAY` only
+  variants: `main4.cpp` one thread · `main3.cpp` two · `main_old.cpp` first
+
+  build -> siblings: four scripts, one output
+  siblings -> run: last build wins
+  run -> variants: read main4 first, it is the shortest
+}
+
+state: State {
+  direction: down
+
+  shared: `shared_data` · mutexes + atomics
+  queue: image queue · capture -> processor
+  pool: ToGL texture pool · driver-owned
+  handoff: `current_render_image` + `new_image_available`
+  config: `screen_id` = -1, `fps` = 30
+}
+
+core: Core {
+  direction: right
+  grid-columns: 2
+  grid-rows: 2
+  horizontal-gap: 90
+
+  load: load NvFBC {
+    direction: down
+
+    dlopen: `dlopen("libnvidia-fbc.so.1")` · nothing linked
+    create: `NvFBCCreateInstance` · fills the `NvFBC.h` list
+    handle: `nvFBCCreateHandle` · display + FBConfig
+
+    dlopen -> create: no library, no API
+    create -> handle: ties API to a display
+  }
+
+  capture: capture thread {
+    direction: down
+
+    session: `nvFBCCreateCaptureSession` · TO_GL, push, 30 FPS
+    setup: `nvFBCToGLSetUp` · RGBA pool, own GLX context
+    grab: `nvFBCToGLGrabFrame` · NOWAIT, returns texture
+    export: `eglCreateImage` · texture -> `EGLImageKHR`
+    recreate: `recreate_session` · rebuild on size change
+
+    session -> setup: session first
+    setup -> grab: grab reads the pool
+    grab -> export: fresh frames only
+    export -> recreate: resize starts over
+  }
+
+  handoff: processor thread {
+    direction: down
+
+    pop: blocking pop · image or stop flag
+    swap: destroy old, publish new · one visible
+    signal: `new_image_available` · no pacing
+
+    pop -> swap: lifetime moves forward
+    swap -> signal: render wakes only for a frame
+  }
+
+  render: render thread {
+    direction: down
+
+    eglwin: EGL display, context, surface · 3.3, GLES 2 fallback
+    import: `glEGLImageTargetTexture2DOES` · no readback
+    draw: textured quad + `eglSwapBuffers` · then join on `stop_threads`
+
+    eglwin -> import: import needs a current context
+    import -> draw: draw only after import
+  }
+}
+
+ext: External {
+  direction: down
+
+  driver: NVIDIA driver · `libnvidia-fbc.so.1`
+  xserver: X11 + GLX · display, FBConfig, pbuffer
+  egl: EGL driver · `EGL_KHR_image_base` import
+  screen: captured screen · desktop or one output
+  window: 640x480 window · input ignored
+}
+
+entry -> core: one build script, one binary
+core -> state: three threads meet in one struct
+core -> ext: driver, X and EGL do the work
+
+classes: {
+  entry: {style: {stroke: "#2f6fbf"}}
+  core: {style: {stroke: "#2f8f5f"}}
+  state: {style: {stroke: "#a86a12"; stroke-dash: 3}}
+  ext: {style: {stroke: "#8a4fbf"; stroke-dash: 5}}
+}
+
+entry.class: entry
+core.class: core
+state.class: state
+ext.class: ext
